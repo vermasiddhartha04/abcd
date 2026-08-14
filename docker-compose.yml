@@ -1,0 +1,50 @@
+services:
+
+  # ========================================================
+  # BACKEND
+  # ========================================================
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+
+    container_name: gst-litigation-backend
+
+    ports:
+      - "8000:8000"
+
+    volumes:
+      # Keep uploaded PDFs after container restart
+      - ./backend/app/uploads:/app/app/uploads
+
+      # Keep logs
+      - ./logs:/app/logs
+
+      # Keep application data
+      - ./backend/data:/app/data
+
+    environment:
+      PYTHONUNBUFFERED: "1"
+
+    restart: unless-stopped
+
+
+  # ========================================================
+  # FRONTEND
+  # ========================================================
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+
+    container_name: gst-litigation-frontend
+
+    ports:
+      - "5173:80"
+
+    depends_on:
+      - backend
+
+    restart: unless-stopped
