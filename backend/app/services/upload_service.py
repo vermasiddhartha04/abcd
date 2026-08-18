@@ -21,27 +21,30 @@ def save_upload(
     file: UploadFile,
     case_id: int,
 ):
-    # -----------------------------
-    # Validate file name
-    # -----------------------------
+    # ========================================================
+    # 1. Validate file name
+    # ========================================================
+
     if not file.filename:
         raise HTTPException(
             status_code=400,
             detail="No file selected.",
         )
 
-    # -----------------------------
-    # Validate file type
-    # -----------------------------
+    # ========================================================
+    # 2. Validate file type
+    # ========================================================
+
     if not allowed_file(file.filename):
         raise HTTPException(
             status_code=400,
             detail="Only PDF, DOC and DOCX files are allowed.",
         )
 
-    # -----------------------------
-    # Generate unique filename
-    # -----------------------------
+    # ========================================================
+    # 3. Generate unique filename
+    # ========================================================
+
     filename = generate_filename(file.filename)
 
     file_path = os.path.join(
@@ -49,35 +52,66 @@ def save_upload(
         filename,
     )
 
-    # -----------------------------
-    # Save file
-    # -----------------------------
+    # ========================================================
+    # 4. Save physical file
+    # ========================================================
+
     try:
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(
                 file.file,
                 buffer,
             )
+
     except Exception as error:
         raise HTTPException(
             status_code=500,
             detail=f"File upload failed: {str(error)}",
         )
 
-    # -----------------------------
-    # Save database record
-    # -----------------------------
+    # ========================================================
+    # 5. Save upload record in database
+    #
+    # Authentication is not being used currently.
+    # uploaded_by=1 is used because the database column
+    # currently has a NOT NULL constraint.
+    # ========================================================
+
     upload = Upload(
         filename=filename,
         original_filename=file.filename,
         file_type=file.content_type or "application/octet-stream",
         file_path=file_path,
         case_id=case_id,
-        uploaded_by=None,
+        uploaded_by=1,
     )
 
-    db.add(upload)
-    db.commit()
-    db.refresh(upload)
+    # ========================================================
+    # 6. Commit database record
+    # ========================================================
+
+    try:
+        db.add(upload)
+        db.commit()
+        db.refresh(upload)
+
+    except Exception as error:
+        db.rollback()
+
+        # Remove physical file if database save fails
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save upload record: {str(error)}",
+        )
+
+    # ========================================================
+    # 7. Return upload information
+    # ========================================================
 
     return upload
