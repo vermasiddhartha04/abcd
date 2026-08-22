@@ -27,6 +27,10 @@ class Metadata(Base):
     gstin = Column(String(20))
     pan = Column(String(20))
 
+    # Supplier / vendor involved in the GST issue
+    vendor = Column(String(255))
+    vendor_gstin = Column(String(20))
+
     taxpayer_name = Column(String(255))
 
     notice_number = Column(String(100))

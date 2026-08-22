@@ -3,7 +3,16 @@ from sqlalchemy.orm import Session
 from app.models.analysis import Analysis
 from app.models.metadata import Metadata
 from app.models.ocr_result import OCRResult
+
 from app.utils.analysis_engine import analyze_notice
+
+from app.utils.demand_extractor import (
+    extract_demand_summary,
+)
+
+from app.utils.allegation_extractor import (
+    extract_allegations,
+)
 
 
 def process_analysis(
@@ -13,17 +22,32 @@ def process_analysis(
     """
     Process GST litigation analysis.
 
-    Supports:
-    - SCN
-    - OIO
-    - Appeal
-    - OIA
-    - DRC
-    - Unknown
+    Supported document types:
+
+    DRC-01A
+    SCN
+    SCN_REPLY
+    OIO
+    APPEAL
+    OIA
+    UNKNOWN
+
+    The analysis engine determines:
+
+    - Document type
+    - Current stage
+    - Next stage
+    - Required action
+    - Risk level
+    - GST sections
+    - Issue category
+    - Issue
+    - Summary
+    - Recommendation
     """
 
     # ==========================================================
-    # 1. Find Metadata
+    # 1. FIND METADATA
     # ==========================================================
 
     metadata = (
@@ -38,7 +62,7 @@ def process_analysis(
         return None
 
     # ==========================================================
-    # 2. Find OCR Result
+    # 2. FIND OCR RESULT
     # ==========================================================
 
     ocr_result = (
@@ -53,34 +77,150 @@ def process_analysis(
         return None
 
     # ==========================================================
-    # 3. Complete Metadata
+    # 3. COMPLETE METADATA
+    # ==========================================================
+
+    # ==========================================================
+    # 3A. EXTRACT STRUCTURED LITIGATION DATA
+    # ==========================================================
+
+    text = (
+        ocr_result.extracted_text
+        or ""
+    )
+
+    demand_summary = (
+        extract_demand_summary(
+            text
+        )
+    )
+
+    allegations = (
+        extract_allegations(
+            text
+        )
+    )
+
+    # ==========================================================
+    # 3B. COMPLETE METADATA
+    # ==========================================================
+
+    # ==========================================================
+    # 3A. EXTRACT STRUCTURED LITIGATION DATA
+    # ==========================================================
+
+    text = (
+        ocr_result.extracted_text
+        or ""
+    )
+
+    demand_summary = (
+        extract_demand_summary(
+            text
+        )
+    )
+
+    allegations = (
+        extract_allegations(
+            text
+        )
+    )
+
+    # ==========================================================
+    # 3B. COMPLETE ANALYSIS METADATA
     # ==========================================================
 
     metadata_dict = {
-        "gstin": metadata.gstin,
-        "pan": metadata.pan,
-        "taxpayer_name": metadata.taxpayer_name,
-        "notice_number": metadata.notice_number,
-        "document_type": metadata.document_type,
-        "section": metadata.section,
-        "financial_year": metadata.financial_year,
-        "tax_period": metadata.tax_period,
-        "tax_amount": metadata.tax_amount,
-        "interest": metadata.interest,
-        "penalty": metadata.penalty,
+        "gstin":
+            metadata.gstin,
+
+        "pan":
+            metadata.pan,
+
+        "taxpayer_name":
+            metadata.taxpayer_name,
+
+        "notice_number":
+            metadata.notice_number,
+
+        "document_type":
+            metadata.document_type,
+
+        "section":
+            metadata.section,
+
+        "financial_year":
+            metadata.financial_year,
+
+        "tax_period":
+            metadata.tax_period,
+
+        "tax_amount":
+            metadata.tax_amount,
+
+        "interest":
+            metadata.interest,
+
+        "penalty":
+            metadata.penalty,
+
+        # Supplier / Vendor
+        "vendor":
+            metadata.vendor,
+
+        "vendor_gstin":
+            metadata.vendor_gstin,
+
+        # Demand extraction
+        "demands":
+            demand_summary.get(
+                "items",
+                [],
+            ),
+
+        "tax_total":
+            demand_summary.get(
+                "tax_total"
+            ),
+
+        "interest_total":
+            demand_summary.get(
+                "interest_total"
+            ),
+
+        "penalty_total":
+            demand_summary.get(
+                "penalty_total"
+            ),
+
+        "total_demand":
+            demand_summary.get(
+                "total_demand"
+            ),
+
+        # Penalty proposals
+        "penalty_proposals":
+            demand_summary.get(
+                "penalty_proposals",
+                [],
+            ),
+
+        # Allegations
+        "allegations":
+            allegations,
     }
 
     # ==========================================================
-    # 4. Analysis Engine
+    # 4. RUN ANALYSIS ENGINE
     # ==========================================================
 
     result = analyze_notice(
-        text=ocr_result.extracted_text,
+        text=ocr_result.extracted_text or "",
         metadata=metadata_dict,
     )
 
     # ==========================================================
-    # 5. Existing Analysis
+    # 5. FIND EXISTING ANALYSIS
     # ==========================================================
 
     analysis = (
@@ -92,62 +232,129 @@ def process_analysis(
     )
 
     # ==========================================================
-    # 6. Update Existing
+    # 6. VALUES FROM ANALYSIS ENGINE
+    # ==========================================================
+
+    document_type = result.get(
+        "document_type",
+        "UNKNOWN",
+    )
+
+    summary = result.get(
+        "summary",
+    )
+
+    risk_level = result.get(
+        "risk_level",
+        "Low",
+    )
+
+    reply_required = result.get(
+        "reply_required",
+        False,
+    )
+
+    recommendation = result.get(
+        "recommendation",
+    )
+
+    # ==========================================================
+    # 7. UPDATE EXISTING ANALYSIS
     # ==========================================================
 
     if analysis:
 
-        analysis.document_type = result.get(
-            "document_type"
+        analysis.document_type = (
+            document_type
         )
 
-        analysis.summary = result.get(
-            "summary"
+        analysis.summary = (
+            summary
         )
 
-        analysis.risk_level = result.get(
-            "risk_level"
+        analysis.risk_level = (
+            risk_level
         )
 
-        analysis.reply_required = result.get(
-            "reply_required",
-            False,
+        analysis.reply_required = (
+            reply_required
         )
 
-        analysis.recommendation = result.get(
-            "recommendation"
+        analysis.recommendation = (
+            recommendation
+        )
+
+        analysis.demands = (
+            demand_summary.get(
+                "items",
+                [],
+            )
+        )
+
+        analysis.penalty_proposals = (
+            demand_summary.get(
+                "penalty_proposals",
+                [],
+            )
+        )
+
+        analysis.allegations = (
+            allegations
         )
 
     # ==========================================================
-    # 7. Create New
+    # 8. CREATE NEW ANALYSIS
     # ==========================================================
 
     else:
 
         analysis = Analysis(
+
             metadata_id=metadata.id,
-            document_type=result.get(
-                "document_type"
+
+            document_type=(
+                document_type
             ),
-            summary=result.get(
-                "summary"
+
+            summary=(
+                summary
             ),
-            risk_level=result.get(
-                "risk_level"
+
+            risk_level=(
+                risk_level
             ),
-            reply_required=result.get(
-                "reply_required",
-                False,
+
+            reply_required=(
+                reply_required
             ),
-            recommendation=result.get(
-                "recommendation"
+
+            recommendation=(
+                recommendation
+            ),
+
+            demands=(
+                demand_summary.get(
+                    "items",
+                    [],
+                )
+            ),
+
+            penalty_proposals=(
+                demand_summary.get(
+                    "penalty_proposals",
+                    [],
+                )
+            ),
+
+            allegations=(
+                allegations
             ),
         )
 
         db.add(analysis)
 
     # ==========================================================
-    # 8. Save
+    # 9. SAVE
     # ==========================================================
 
     db.commit()

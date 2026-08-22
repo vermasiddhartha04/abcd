@@ -1,745 +1,905 @@
 import re
+from typing import Any, Dict, List, Optional
 
 
-# ============================================================
-# DOCUMENT TYPE DETECTION
-# ============================================================
+# ==========================================================
+# HELPERS
+# ==========================================================
 
-def detect_document_type(text: str) -> str:
-    """
-    Detect GST litigation document type.
+def clean_text(
+    value: Optional[str],
+) -> Optional[str]:
 
-    Supported:
-    - SCN
-    - OIO
-    - APPEAL
-    - OIA
-    - DRC
-    - UNKNOWN
+    if value is None:
+        return None
 
-    Detection priority:
+    value = re.sub(
+        r"\s+",
+        " ",
+        str(value),
+    ).strip()
 
-        OIA
-          ↓
-        APPEAL
-          ↓
-        OIO
-          ↓
-        SCN
-          ↓
-        DRC
+    return value if value else None
 
-    Important:
-    An Appeal document can contain the words
-    "Order-in-Original" because the Appeal may challenge
-    the OIO.
 
-    Therefore APPEAL must be checked before OIO.
-    """
+def unique(
+    items: List[str],
+) -> List[str]:
 
-    text = text or ""
-    upper = text.upper()
+    result = []
+    seen = set()
 
-    # --------------------------------------------------------
-    # OIA
-    #
-    # OIA must be checked first because an OIA document
-    # can also contain the word "Appeal".
-    # --------------------------------------------------------
+    for item in items:
+
+        item = clean_text(item)
+
+        if not item:
+            continue
+
+        key = item.lower()
+
+        if key not in seen:
+
+            seen.add(key)
+
+            result.append(item)
+
+    return result
+
+
+# ==========================================================
+# DOCUMENT CLASSIFICATION
+# ==========================================================
+
+def classify_document(
+    text: str,
+    metadata: Dict[str, Any],
+) -> str:
+
+    upper_text = (
+        text or ""
+    ).upper()
+
+    metadata_type = str(
+        metadata.get(
+            "document_type"
+        )
+        or ""
+    ).upper()
+
+    # ------------------------------------------------------
+    # DRC-01A
+    # ------------------------------------------------------
 
     if (
-        "ORDER-IN-APPEAL" in upper
-        or "ORDER IN APPEAL" in upper
-        or re.search(r"\bOIA\b", upper)
+        metadata_type == "DRC-01A"
+        or "DRC-01A" in upper_text
+        or "DRC 01A" in upper_text
+        or "FORM GST DRC-01A" in upper_text
+        or "FORM GST DRC 01A" in upper_text
+    ):
+        return "DRC-01A"
+
+    # ------------------------------------------------------
+    # SCN REPLY
+    # ------------------------------------------------------
+
+    if any(
+        phrase in upper_text
+        for phrase in [
+            "REPLY TO SHOW CAUSE NOTICE",
+            "REPLY TO THE SHOW CAUSE NOTICE",
+            "RESPONSE TO SHOW CAUSE NOTICE",
+            "SCN REPLY",
+            "SUBMISSIONS IN RESPONSE TO SCN",
+        ]
+    ):
+        return "SCN_REPLY"
+
+    # ------------------------------------------------------
+    # OIA
+    # ------------------------------------------------------
+
+    if (
+        "ORDER-IN-APPEAL" in upper_text
+        or "ORDER IN APPEAL" in upper_text
     ):
         return "OIA"
 
-    # --------------------------------------------------------
-    # APPEAL
-    #
-    # IMPORTANT:
-    # Check Appeal BEFORE OIO.
-    #
-    # Example:
-    #
-    # "MEMORANDUM OF APPEAL
-    #  against Order-in-Original"
-    #
-    # This must be detected as APPEAL, not OIO.
-    # --------------------------------------------------------
-
-    if (
-        "MEMORANDUM OF APPEAL" in upper
-        or "GROUNDS OF APPEAL" in upper
-        or "NOTICE OF APPEAL" in upper
-        or "APPEAL AGAINST" in upper
-        or re.search(r"\bAPPEAL\b", upper)
-    ):
-        return "APPEAL"
-
-    # --------------------------------------------------------
+    # ------------------------------------------------------
     # OIO
-    # --------------------------------------------------------
+    # ------------------------------------------------------
 
     if (
-        "ORDER-IN-ORIGINAL" in upper
-        or "ORDER IN ORIGINAL" in upper
-        or re.search(r"\bOIO\b", upper)
+        "ORDER-IN-ORIGINAL" in upper_text
+        or "ORDER IN ORIGINAL" in upper_text
     ):
         return "OIO"
 
-    # --------------------------------------------------------
+    # ------------------------------------------------------
+    # APPEAL
+    # ------------------------------------------------------
+
+    if any(
+        phrase in upper_text
+        for phrase in [
+            "MEMORANDUM OF APPEAL",
+            "APPEAL AGAINST ORDER",
+            "GROUNDS OF APPEAL",
+            "APPEAL PETITION",
+            "APPEAL BEFORE THE",
+        ]
+    ):
+        return "APPEAL"
+
+    # ------------------------------------------------------
     # SCN
-    # --------------------------------------------------------
+    # ------------------------------------------------------
 
     if (
-        "SHOW CAUSE NOTICE" in upper
-        or re.search(r"\bSCN\b", upper)
+        "SHOW CAUSE NOTICE" in upper_text
+        or "SHOWCAUSE NOTICE" in upper_text
+        or re.search(
+            r"\bSCN\b",
+            upper_text,
+        )
     ):
         return "SCN"
-
-    # --------------------------------------------------------
-    # DRC
-    # --------------------------------------------------------
-
-    if re.search(r"\bDRC[- ]?\d", upper):
-        return "DRC"
-
-    # --------------------------------------------------------
-    # UNKNOWN
-    # --------------------------------------------------------
 
     return "UNKNOWN"
 
 
-# ============================================================
+# ==========================================================
+# STAGE MAP
+# ==========================================================
+
+STAGE_MAP = {
+
+    "DRC-01A": {
+
+        "current_stage": "PRE_SCN",
+
+        "next_stage": "SCN",
+
+        "action_type": "PRE_SCN_RESPONSE",
+
+        "action_label": (
+            "Submit response or pay liability within 15 days"
+        ),
+
+        "reply_required": True,
+
+        "appeal_required": False,
+    },
+
+    "SCN": {
+
+        "current_stage": "SCN",
+
+        "next_stage": "SCN_REPLY",
+
+        "action_type": "SCN_REPLY",
+
+        "action_label": "Prepare SCN Reply",
+
+        "reply_required": True,
+
+        "appeal_required": False,
+    },
+
+    "SCN_REPLY": {
+
+        "current_stage": "SCN_REPLY",
+
+        "next_stage": "OIO",
+
+        "action_type": "OIO_REVIEW",
+
+        "action_label": (
+            "Review SCN Reply and prepare for adjudication"
+        ),
+
+        "reply_required": False,
+
+        "appeal_required": False,
+    },
+
+    "OIO": {
+
+        "current_stage": "OIO",
+
+        "next_stage": "APPEAL",
+
+        "action_type": "APPEAL_REVIEW",
+
+        "action_label": (
+            "Review OIO and evaluate appeal"
+        ),
+
+        "reply_required": False,
+
+        "appeal_required": True,
+    },
+
+    "APPEAL": {
+
+        "current_stage": "APPEAL",
+
+        "next_stage": "OIA",
+
+        "action_type": "OIA_TRACKING",
+
+        "action_label": (
+            "Track appeal and prepare for OIA"
+        ),
+
+        "reply_required": False,
+
+        "appeal_required": False,
+    },
+
+    "OIA": {
+
+        "current_stage": "OIA",
+
+        "next_stage": "FINAL",
+
+        "action_type": "FINAL_REVIEW",
+
+        "action_label": (
+            "Review Order-in-Appeal and determine final outcome"
+        ),
+
+        "reply_required": False,
+
+        "appeal_required": False,
+    },
+
+    "UNKNOWN": {
+
+        "current_stage": "UNKNOWN",
+
+        "next_stage": None,
+
+        "action_type": "MANUAL_REVIEW",
+
+        "action_label": (
+            "Review document manually and determine litigation stage"
+        ),
+
+        "reply_required": False,
+
+        "appeal_required": False,
+    },
+}
+
+
+# ==========================================================
 # SECTION EXTRACTION
-# ============================================================
+# ==========================================================
 
-def extract_sections(metadata: dict) -> list:
-    """
-    Extract unique GST section numbers from metadata.
-    """
+def extract_sections(
+    text: str,
+    metadata: Dict[str, Any],
+) -> List[str]:
 
-    section = metadata.get("section")
+    sections = []
 
-    if not section:
-        return []
-
-    section_text = str(section)
-
-    sections = re.findall(
-        r"\b\d{1,3}[A-Za-z]?\b",
-        section_text,
+    metadata_section = metadata.get(
+        "section"
     )
 
-    # Remove duplicates while preserving order
-    return list(dict.fromkeys(sections))
+    if metadata_section:
+
+        metadata_section = str(
+            metadata_section
+        ).strip()
+
+        metadata_section = re.sub(
+            r"^Section\s+Section\s+",
+            "Section ",
+            metadata_section,
+            flags=re.IGNORECASE,
+        )
+
+        sections.append(
+            metadata_section
+        )
+
+    patterns = [
+        r"\bSection\s+(\d+[A-Z]?(?:\([0-9A-Z]+\))?)",
+        r"\bSec\.?\s+(\d+[A-Z]?(?:\([0-9A-Z]+\))?)",
+    ]
+
+    for pattern in patterns:
+
+        matches = re.findall(
+            pattern,
+            text or "",
+            re.IGNORECASE,
+        )
+
+        for match in matches:
+
+            sections.append(
+                f"Section {match}"
+            )
+
+    return unique(
+        sections
+    )
 
 
-# ============================================================
-# RISK ANALYSIS
-# ============================================================
+# ==========================================================
+# ISSUE
+# ==========================================================
+
+def detect_issue(
+    text: str,
+) -> str:
+
+    upper_text = (
+        text or ""
+    ).upper()
+
+    if (
+        "180 DAYS" in upper_text
+        and (
+            "ITC" in upper_text
+            or "INPUT TAX CREDIT" in upper_text
+        )
+    ):
+        return (
+            "Ineligible ITC due to non-payment "
+            "to vendors within 180 days"
+        )
+
+    if (
+        "INELIGIBLE ITC" in upper_text
+        or "INELIGIBLE INPUT TAX CREDIT" in upper_text
+    ):
+        return "Ineligible Input Tax Credit"
+
+    if (
+        "INPUT TAX CREDIT" in upper_text
+        or re.search(
+            r"\bITC\b",
+            upper_text,
+        )
+    ):
+        return "Input Tax Credit related issue"
+
+    if (
+        "TAX EVASION" in upper_text
+        or "EVASION OF TAX" in upper_text
+    ):
+        return "Tax evasion"
+
+    if (
+        "SHORT PAYMENT" in upper_text
+        or "SHORT PAID" in upper_text
+    ):
+        return "Short payment of tax"
+
+    if "WRONGFUL AVAILMENT" in upper_text:
+        return "Wrongful availment of ITC"
+
+    if "REFUND" in upper_text:
+        return "GST refund related issue"
+
+    return "GST compliance issue"
+
+
+# ==========================================================
+# ISSUE CATEGORY
+# ==========================================================
+
+def detect_issue_category(
+    text: str,
+) -> str:
+
+    upper_text = (
+        text or ""
+    ).upper()
+
+    if (
+        "ITC" in upper_text
+        or "INPUT TAX CREDIT" in upper_text
+    ):
+        return "ITC"
+
+    if "REFUND" in upper_text:
+        return "REFUND"
+
+    if (
+        "TAX EVASION" in upper_text
+        or "EVASION OF TAX" in upper_text
+    ):
+        return "TAX EVASION"
+
+    if "REGISTRATION" in upper_text:
+        return "REGISTRATION"
+
+    if "CLASSIFICATION" in upper_text:
+        return "CLASSIFICATION"
+
+    return "GST COMPLIANCE"
+
+
+# ==========================================================
+# RISK CALCULATION
+# ==========================================================
 
 def calculate_risk(
     document_type: str,
-    sections: list,
-    metadata: dict,
+    text: str,
+    metadata: Dict[str, Any],
 ) -> str:
-    """
-    Calculate basic litigation risk.
 
-    Rules:
+    upper_text = (
+        text or ""
+    ).upper()
 
-    Section 74
-        → High
+    score = 0
 
-    Section 73 / 16
-        → Medium
+    # ------------------------------------------------------
+    # DRC-01A / SCN litigation stage
+    # ------------------------------------------------------
 
-    Litigation documents
-        → Medium
+    if document_type == "DRC-01A":
+        score += 3
 
-    Unknown
-        → Low
-    """
+    elif document_type == "SCN":
+        score += 4
 
-    section_set = set(sections)
-
-    # --------------------------------------------------------
-    # Highest priority
-    # --------------------------------------------------------
-
-    if "74" in section_set:
-        return "High"
-
-    # --------------------------------------------------------
-    # Section 73 / 16
-    # --------------------------------------------------------
-
-    if (
-        "73" in section_set
-        or "16" in section_set
-    ):
-        return "Medium"
-
-    # --------------------------------------------------------
-    # Litigation-stage documents
-    # --------------------------------------------------------
-
-    if document_type in {
-        "SCN",
+    elif document_type in {
         "OIO",
         "APPEAL",
         "OIA",
-        "DRC",
     }:
+        score += 4
+
+    # ------------------------------------------------------
+    # Section 74
+    # ------------------------------------------------------
+
+    if re.search(
+        r"\bSECTION\s+74\b",
+        upper_text,
+    ):
+        score += 3
+
+    # ------------------------------------------------------
+    # Fraud / suppression
+    # ------------------------------------------------------
+
+    high_risk_terms = [
+        "FRAUD",
+        "SUPPRESSION",
+        "WILFUL MISSTATEMENT",
+        "WILLFUL MISSTATEMENT",
+        "INTENT TO EVADE",
+        "EVASION OF TAX",
+    ]
+
+    for term in high_risk_terms:
+
+        if term in upper_text:
+
+            score += 3
+
+            break
+
+    # ------------------------------------------------------
+    # ITC issue
+    # ------------------------------------------------------
+
+    if (
+        "INPUT TAX CREDIT" in upper_text
+        or re.search(
+            r"\bITC\b",
+            upper_text,
+        )
+    ):
+        score += 2
+
+    # ------------------------------------------------------
+    # 180 DAYS
+    # ------------------------------------------------------
+
+    if "180 DAYS" in upper_text:
+        score += 2
+
+    # ------------------------------------------------------
+    # Financial exposure
+    # ------------------------------------------------------
+
+    amount = metadata.get(
+        "tax_amount"
+    )
+
+    try:
+
+        if amount is not None:
+
+            numeric_amount = float(
+                amount
+            )
+
+            if numeric_amount >= 10_000_000:
+                score += 4
+
+            elif numeric_amount >= 1_000_000:
+                score += 3
+
+            elif numeric_amount > 0:
+                score += 1
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        pass
+
+    # ------------------------------------------------------
+    # Penalty
+    # ------------------------------------------------------
+
+    penalty = metadata.get(
+        "penalty"
+    )
+
+    try:
+
+        if (
+            penalty is not None
+            and float(penalty) > 0
+        ):
+            score += 1
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        pass
+
+    # ------------------------------------------------------
+    # Final
+    # ------------------------------------------------------
+
+    if score >= 7:
+        return "High"
+
+    if score >= 4:
         return "Medium"
 
     return "Low"
 
 
-# ============================================================
-# ACTION / NEXT STAGE
-# ============================================================
+# ==========================================================
+# SUMMARY
+# ==========================================================
 
-def get_next_action(document_type: str) -> dict:
-    """
-    Decide the next GST litigation action.
-    """
-
-    actions = {
-
-        # ----------------------------------------------------
-        # SCN
-        # ----------------------------------------------------
-
-        "SCN": {
-            "action_type": "SCN_REPLY",
-            "action_label": "Prepare SCN Reply",
-            "next_stage": "SCN_REPLY",
-            "reply_required": True,
-            "appeal_required": False,
-        },
-
-        # ----------------------------------------------------
-        # OIO
-        # ----------------------------------------------------
-
-        "OIO": {
-            "action_type": "APPEAL",
-            "action_label": "Review OIO and Prepare Appeal",
-            "next_stage": "APPEAL",
-            "reply_required": False,
-            "appeal_required": True,
-        },
-
-        # ----------------------------------------------------
-        # APPEAL
-        # ----------------------------------------------------
-
-        "APPEAL": {
-            "action_type": "OIA_REVIEW",
-            "action_label": "Review Appeal and Await OIA",
-            "next_stage": "OIA",
-            "reply_required": False,
-            "appeal_required": False,
-        },
-
-        # ----------------------------------------------------
-        # OIA
-        # ----------------------------------------------------
-
-        "OIA": {
-            "action_type": "FINAL_REVIEW",
-            "action_label": "Review OIA and Determine Further Remedy",
-            "next_stage": "FINAL",
-            "reply_required": False,
-            "appeal_required": False,
-        },
-
-        # ----------------------------------------------------
-        # DRC
-        # ----------------------------------------------------
-
-        "DRC": {
-            "action_type": "DRC_REVIEW",
-            "action_label": "Review DRC Document",
-            "next_stage": "DRC_REVIEW",
-            "reply_required": False,
-            "appeal_required": False,
-        },
-
-        # ----------------------------------------------------
-        # UNKNOWN
-        # ----------------------------------------------------
-
-        "UNKNOWN": {
-            "action_type": "MANUAL_REVIEW",
-            "action_label": "Manual Document Review Required",
-            "next_stage": "UNKNOWN",
-            "reply_required": False,
-            "appeal_required": False,
-        },
-    }
-
-    return actions.get(
-        document_type,
-        actions["UNKNOWN"],
-    )
-
-
-# ============================================================
-# SCN ANALYSIS
-# ============================================================
-
-def analyze_scn(
-    metadata: dict,
-    sections: list,
-    risk: str,
-) -> dict:
-    """
-    Analyze Show Cause Notice.
-    """
+def build_summary(
+    document_type: str,
+    current_stage: str,
+    next_stage: Optional[str],
+    metadata: Dict[str, Any],
+    issue: str,
+    sections: List[str],
+    risk_level: str,
+) -> str:
 
     taxpayer = (
-        metadata.get("taxpayer_name")
-        or "Taxpayer"
+        metadata.get(
+            "taxpayer_name"
+        )
+        or "Taxpayer not identified"
     )
 
-    financial_year = (
-        metadata.get("financial_year")
-        or "Not Available"
+    gstin = (
+        metadata.get(
+            "gstin"
+        )
+        or "GSTIN not identified"
     )
 
     notice_number = (
-        metadata.get("notice_number")
-        or "Not Available"
-    )
-
-    sections_display = (
-        ", ".join(sections)
-        if sections
-        else "Not Available"
-    )
-
-    summary = (
-        f"SCN detected for {taxpayer}. "
-        f"Notice Number: {notice_number}. "
-        f"Applicable GST sections: {sections_display}. "
-        f"Financial Year: {financial_year}. "
-        f"Risk Level: {risk}."
-    )
-
-    if risk == "High":
-
-        recommendation = (
-            "Prepare a detailed SCN reply with factual "
-            "explanations, section-wise legal arguments, "
-            "invoices, books of accounts, GST returns, "
-            "GSTR-1, GSTR-3B, GSTR-2A/2B reconciliation, "
-            "payment records and other supporting evidence. "
-            "The proposed tax, interest and penalty should "
-            "be reviewed against the available records."
+        metadata.get(
+            "notice_number"
         )
+        or "Notice number not identified"
+    )
+
+    # ------------------------------------------------------
+    # DEMAND-AWARE AMOUNT
+    #
+    # Prefer explicit metadata tax_amount.
+    # If unavailable, use the validated structured
+    # total_demand extracted from demand_extractor.py.
+    # ------------------------------------------------------
+
+    tax_amount = metadata.get(
+        "tax_amount"
+    )
+
+    total_demand = metadata.get(
+        "total_demand"
+    )
+
+    effective_amount = (
+        tax_amount
+        if tax_amount is not None
+        else total_demand
+    )
+
+    if effective_amount is not None:
+
+        try:
+
+            formatted_amount = (
+                f"{float(effective_amount):,.2f}"
+            )
+
+            if tax_amount is not None:
+
+                amount_text = (
+                    f"Proposed tax amount: "
+                    f"₹{formatted_amount}."
+                )
+
+            else:
+
+                amount_text = (
+                    f"Total proposed demand: "
+                    f"₹{formatted_amount}."
+                )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            amount_text = (
+                "Proposed demand amount is available."
+            )
 
     else:
 
-        recommendation = (
-            "Review the SCN carefully and prepare factual "
-            "and legally supported submissions with relevant "
-            "GST records and supporting evidence."
+        amount_text = (
+            "Proposed demand amount is not available."
         )
 
-    return {
-        "summary": summary,
-        "recommendation": recommendation,
-        "reply_required": True,
-        "appeal_required": False,
-    }
-
-
-# ============================================================
-# OIO ANALYSIS
-# ============================================================
-
-def analyze_oio(
-    metadata: dict,
-    sections: list,
-    risk: str,
-) -> dict:
-    """
-    Analyze Order-in-Original.
-    """
-
-    taxpayer = (
-        metadata.get("taxpayer_name")
-        or "Taxpayer"
-    )
-
-    financial_year = (
-        metadata.get("financial_year")
-        or "Not Available"
-    )
-
-    notice_number = (
-        metadata.get("notice_number")
-        or "Not Available"
-    )
-
-    sections_display = (
+    section_text = (
         ", ".join(sections)
         if sections
-        else "Not Available"
+        else "No specific GST section extracted."
     )
 
-    summary = (
-        f"OIO detected for {taxpayer}. "
-        f"Reference Number: {notice_number}. "
-        f"Applicable GST sections: {sections_display}. "
-        f"Financial Year: {financial_year}. "
-        f"Risk Level: {risk}."
+    next_stage_text = (
+        next_stage
+        if next_stage
+        else "Manual review required"
     )
 
-    recommendation = (
-        "Review the Order-in-Original against the SCN, "
-        "taxpayer's reply and supporting evidence. "
-        "Identify the findings of the adjudicating authority, "
-        "the demand confirmed, modified or dropped, and "
-        "evaluate potential grounds for appeal."
+    return (
+        f"{document_type} document detected for "
+        f"{taxpayer}. "
+        f"GSTIN: {gstin}. "
+        f"Notice Number: {notice_number}. "
+        f"Current litigation stage: "
+        f"{current_stage}. "
+        f"Next stage: "
+        f"{next_stage_text}. "
+        f"Main issue: "
+        f"{issue}. "
+        f"Applicable GST sections: "
+        f"{section_text}. "
+        f"{amount_text} "
+        f"Risk Level: "
+        f"{risk_level}."
     )
 
-    return {
-        "summary": summary,
-        "recommendation": recommendation,
-        "reply_required": False,
-        "appeal_required": True,
-    }
 
+# ==========================================================
+# RECOMMENDATION
+# ==========================================================
 
-# ============================================================
-# APPEAL ANALYSIS
-# ============================================================
+def build_recommendation(
+    document_type: str,
+    issue: str,
+    risk_level: str,
+) -> str:
 
-def analyze_appeal(
-    metadata: dict,
-    sections: list,
-    risk: str,
-) -> dict:
-    """
-    Analyze Appeal document.
-    """
+    if document_type == "DRC-01A":
 
-    taxpayer = (
-        metadata.get("taxpayer_name")
-        or "Taxpayer"
-    )
-
-    financial_year = (
-        metadata.get("financial_year")
-        or "Not Available"
-    )
-
-    notice_number = (
-        metadata.get("notice_number")
-        or "Not Available"
-    )
-
-    sections_display = (
-        ", ".join(sections)
-        if sections
-        else "Not Available"
-    )
-
-    summary = (
-        f"Appeal document detected for {taxpayer}. "
-        f"Reference Number: {notice_number}. "
-        f"Applicable GST sections: {sections_display}. "
-        f"Financial Year: {financial_year}. "
-        f"Risk Level: {risk}."
-    )
-
-    recommendation = (
-        "Review the challenged Order-in-Original, "
-        "identify disputed findings and formulate "
-        "fact-based and legally supported grounds of "
-        "appeal. Supporting documents and the relief "
-        "sought should be reviewed before filing."
-    )
-
-    return {
-        "summary": summary,
-        "recommendation": recommendation,
-        "reply_required": False,
-        "appeal_required": False,
-    }
-
-
-# ============================================================
-# OIA ANALYSIS
-# ============================================================
-
-def analyze_oia(
-    metadata: dict,
-    sections: list,
-    risk: str,
-) -> dict:
-    """
-    Analyze Order-in-Appeal.
-    """
-
-    taxpayer = (
-        metadata.get("taxpayer_name")
-        or "Taxpayer"
-    )
-
-    financial_year = (
-        metadata.get("financial_year")
-        or "Not Available"
-    )
-
-    notice_number = (
-        metadata.get("notice_number")
-        or "Not Available"
-    )
-
-    sections_display = (
-        ", ".join(sections)
-        if sections
-        else "Not Available"
-    )
-
-    summary = (
-        f"OIA detected for {taxpayer}. "
-        f"Reference Number: {notice_number}. "
-        f"Applicable GST sections: {sections_display}. "
-        f"Financial Year: {financial_year}. "
-        f"Risk Level: {risk}."
-    )
-
-    recommendation = (
-        "Review the Order-in-Appeal against the "
-        "Order-in-Original and grounds of appeal. "
-        "Determine whether the original order was upheld, "
-        "modified or set aside and identify the appropriate "
-        "next legal action."
-    )
-
-    return {
-        "summary": summary,
-        "recommendation": recommendation,
-        "reply_required": False,
-        "appeal_required": False,
-    }
-
-
-# ============================================================
-# DRC ANALYSIS
-# ============================================================
-
-def analyze_drc(
-    metadata: dict,
-    sections: list,
-    risk: str,
-) -> dict:
-    """
-    Analyze DRC document.
-    """
-
-    taxpayer = (
-        metadata.get("taxpayer_name")
-        or "Taxpayer"
-    )
-
-    financial_year = (
-        metadata.get("financial_year")
-        or "Not Available"
-    )
-
-    summary = (
-        f"DRC document detected for {taxpayer}. "
-        f"Financial Year: {financial_year}. "
-        f"Risk Level: {risk}."
-    )
-
-    recommendation = (
-        "Review the DRC document, payment status, "
-        "demand details and applicable GST records. "
-        "Determine the appropriate compliance or "
-        "litigation action."
-    )
-
-    return {
-        "summary": summary,
-        "recommendation": recommendation,
-        "reply_required": False,
-        "appeal_required": False,
-    }
-
-
-# ============================================================
-# MAIN ANALYSIS FUNCTION
-# ============================================================
-
-def analyze_notice(
-    text: str,
-    metadata: dict,
-):
-    """
-    Main GST litigation analysis function.
-
-    Supports:
-
-    SCN
-    OIO
-    APPEAL
-    OIA
-    DRC
-    UNKNOWN
-    """
-
-    text = text or ""
-    metadata = metadata or {}
-
-    # --------------------------------------------------------
-    # 1. Detect document type
-    # --------------------------------------------------------
-
-    document_type = detect_document_type(
-        text
-    )
-
-    # --------------------------------------------------------
-    # 2. Extract GST sections
-    # --------------------------------------------------------
-
-    sections = extract_sections(
-        metadata
-    )
-
-    # --------------------------------------------------------
-    # 3. Calculate risk
-    # --------------------------------------------------------
-
-    risk = calculate_risk(
-        document_type=document_type,
-        sections=sections,
-        metadata=metadata,
-    )
-
-    # --------------------------------------------------------
-    # 4. Document-specific analysis
-    # --------------------------------------------------------
+        return (
+            "Review the pre-SCN intimation carefully, "
+            "verify the proposed liability with GST records, "
+            "and submit the required response or payment "
+            "within the specified time."
+        )
 
     if document_type == "SCN":
 
-        analysis = analyze_scn(
-            metadata=metadata,
-            sections=sections,
-            risk=risk,
+        return (
+            "Review the SCN carefully and prepare factual "
+            "and legally supported submissions with relevant "
+            "GST records and supporting evidence to rebut "
+            "the allegations and seek withdrawal of the "
+            "proposed demand."
         )
 
-    elif document_type == "OIO":
+    if document_type == "SCN_REPLY":
 
-        analysis = analyze_oio(
-            metadata=metadata,
-            sections=sections,
-            risk=risk,
+        return (
+            "Review the SCN Reply and supporting evidence "
+            "and prepare for adjudication and the "
+            "Order-in-Original."
         )
 
-    elif document_type == "APPEAL":
+    if document_type == "OIO":
 
-        analysis = analyze_appeal(
-            metadata=metadata,
-            sections=sections,
-            risk=risk,
+        return (
+            "Review the Order-in-Original and determine "
+            "whether an appeal should be filed based on "
+            "the findings on facts and law."
         )
 
-    elif document_type == "OIA":
+    if document_type == "APPEAL":
 
-        analysis = analyze_oia(
-            metadata=metadata,
-            sections=sections,
-            risk=risk,
+        return (
+            "Review the grounds of appeal, supporting "
+            "documents and appellate proceedings and "
+            "prepare for the Order-in-Appeal."
         )
 
-    elif document_type == "DRC":
+    if document_type == "OIA":
 
-        analysis = analyze_drc(
-            metadata=metadata,
-            sections=sections,
-            risk=risk,
+        return (
+            "Review the Order-in-Appeal and determine "
+            "whether any further legal action is required."
         )
 
-    else:
-
-        analysis = {
-            "summary": (
-                "The uploaded document could not be "
-                "reliably classified as SCN, OIO, Appeal "
-                "or OIA."
-            ),
-            "recommendation": (
-                "Manual document review is required. "
-                "Verify the document type and relevant "
-                "GST litigation stage."
-            ),
-            "reply_required": False,
-            "appeal_required": False,
-        }
-
-    # --------------------------------------------------------
-    # 5. Determine next action
-    # --------------------------------------------------------
-
-    action = get_next_action(
-        document_type
+    return (
+        "Review the document manually and determine "
+        "the appropriate GST litigation stage and action."
     )
 
-    # --------------------------------------------------------
-    # 6. Final analysis result
-    # --------------------------------------------------------
+
+# ==========================================================
+# MAIN ANALYSIS
+# ==========================================================
+
+def analyze_notice(
+    text: str,
+    metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+
+    text = text or ""
+
+    # ------------------------------------------------------
+    # DOCUMENT
+    # ------------------------------------------------------
+
+    document_type = classify_document(
+        text=text,
+        metadata=metadata,
+    )
+
+    # ------------------------------------------------------
+    # STAGE
+    # ------------------------------------------------------
+
+    stage = STAGE_MAP.get(
+        document_type,
+        STAGE_MAP["UNKNOWN"],
+    )
+
+    current_stage = stage[
+        "current_stage"
+    ]
+
+    next_stage = stage[
+        "next_stage"
+    ]
+
+    action_type = stage[
+        "action_type"
+    ]
+
+    action_label = stage[
+        "action_label"
+    ]
+
+    # ------------------------------------------------------
+    # SECTIONS
+    # ------------------------------------------------------
+
+    sections = extract_sections(
+        text=text,
+        metadata=metadata,
+    )
+
+    # ------------------------------------------------------
+    # ISSUE
+    # ------------------------------------------------------
+
+    issue = detect_issue(
+        text
+    )
+
+    issue_category = detect_issue_category(
+        text
+    )
+
+    # ------------------------------------------------------
+    # RISK
+    # ------------------------------------------------------
+
+    risk_level = calculate_risk(
+        document_type=document_type,
+        text=text,
+        metadata=metadata,
+    )
+
+    # ------------------------------------------------------
+    # SUMMARY
+    # ------------------------------------------------------
+
+    summary = build_summary(
+        document_type=document_type,
+        current_stage=current_stage,
+        next_stage=next_stage,
+        metadata=metadata,
+        issue=issue,
+        sections=sections,
+        risk_level=risk_level,
+    )
+
+    # ------------------------------------------------------
+    # RECOMMENDATION
+    # ------------------------------------------------------
+
+    recommendation = build_recommendation(
+        document_type=document_type,
+        issue=issue,
+        risk_level=risk_level,
+    )
+
+    # ------------------------------------------------------
+    # FINAL
+    # ------------------------------------------------------
 
     return {
+
         "document_type": document_type,
+
+        "current_stage": current_stage,
+
+        "next_stage": next_stage,
+
+        "action_type": action_type,
+
+        "action_label": action_label,
+
+        "reply_required": stage[
+            "reply_required"
+        ],
+
+        "appeal_required": stage[
+            "appeal_required"
+        ],
+
+        "risk_level": risk_level,
+
+        "summary": summary,
+
+        "recommendation": recommendation,
 
         "sections": sections,
 
-        "risk_level": risk,
+        "issue_category": issue_category,
 
-        "summary": analysis.get(
-            "summary"
-        ),
-
-        "recommendation": analysis.get(
-            "recommendation"
-        ),
-
-        "reply_required": analysis.get(
-            "reply_required",
-            action.get(
-                "reply_required",
-                False,
-            ),
-        ),
-
-        "appeal_required": analysis.get(
-            "appeal_required",
-            action.get(
-                "appeal_required",
-                False,
-            ),
-        ),
-
-        "action_type": action.get(
-            "action_type"
-        ),
-
-        "action_label": action.get(
-            "action_label"
-        ),
-
-        "next_stage": action.get(
-            "next_stage"
-        ),
+        "issue": issue,
     }

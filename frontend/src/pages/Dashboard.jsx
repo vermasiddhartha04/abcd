@@ -93,7 +93,7 @@ function Dashboard() {
 
         <StatCard
           title="Replies Generated"
-          value={stats.repliesGenerated}
+          value={stats.replies_generated}
           color="#0891b2"
         />
       </div>

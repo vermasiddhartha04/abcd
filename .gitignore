@@ -49,3 +49,15 @@ desktop.ini
 # Temporary
 *.tmp
 *.temp
+
+# Project backups
+**/*_backup_*
+**/backup_before_*
+
+# Backup files
+**/*_backup.py
+**/*_backup*.py
+
+# Generated reply documents
+backend/app/services/generated_replies/*
+!backend/app/services/generated_replies/.gitkeep

@@ -8,6 +8,10 @@ from pydantic import BaseModel, ConfigDict
 class MetadataBase(BaseModel):
     gstin: Optional[str] = None
     pan: Optional[str] = None
+
+    vendor: Optional[str] = None
+    vendor_gstin: Optional[str] = None
+
     taxpayer_name: Optional[str] = None
     notice_number: Optional[str] = None
     document_type: Optional[str] = None

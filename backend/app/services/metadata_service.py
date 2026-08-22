@@ -9,30 +9,32 @@ def process_metadata(
     db: Session,
     ocr_result_id: int,
 ):
-    # --------------------------------------------------
-    # Find OCR Result
-    # --------------------------------------------------
+    # ==========================================================
+    # 1. FIND OCR RESULT
+    # ==========================================================
 
     ocr_result = (
         db.query(OCRResult)
-        .filter(OCRResult.id == ocr_result_id)
+        .filter(
+            OCRResult.id == ocr_result_id
+        )
         .first()
     )
 
     if not ocr_result:
         return None
 
-    # --------------------------------------------------
-    # Extract GST Metadata
-    # --------------------------------------------------
+    # ==========================================================
+    # 2. EXTRACT GST METADATA
+    # ==========================================================
 
-    data = extract_gst_metadata(
-        ocr_result.extracted_text
+    extracted_data = extract_gst_metadata(
+        ocr_result.extracted_text or ""
     )
 
-    # --------------------------------------------------
-    # Check Existing Metadata
-    # --------------------------------------------------
+    # ==========================================================
+    # 3. FIND EXISTING METADATA
+    # ==========================================================
 
     metadata = (
         db.query(Metadata)
@@ -42,89 +44,158 @@ def process_metadata(
         .first()
     )
 
-    # --------------------------------------------------
-    # If metadata already exists → UPDATE
-    # --------------------------------------------------
+    # ==========================================================
+    # 4. COMMON VALUES
+    # ==========================================================
+
+    gstin = extracted_data.get("gstin")
+    pan = extracted_data.get("pan")
+
+    vendor = extracted_data.get(
+        "vendor"
+    )
+
+    vendor_gstin = extracted_data.get(
+        "vendor_gstin"
+    )
+
+    taxpayer_name = extracted_data.get(
+        "taxpayer_name"
+    )
+    notice_number = extracted_data.get(
+        "notice_number"
+    )
+    document_type = extracted_data.get(
+        "document_type"
+    )
+    section = extracted_data.get(
+        "section"
+    )
+    financial_year = extracted_data.get(
+        "financial_year"
+    )
+    tax_period = extracted_data.get(
+        "tax_period"
+    )
+    tax_amount = extracted_data.get(
+        "tax_amount"
+    )
+    interest = extracted_data.get(
+        "interest"
+    )
+    penalty = extracted_data.get(
+        "penalty"
+    )
+
+    # ==========================================================
+    # 5. UPDATE EXISTING METADATA
+    # ==========================================================
 
     if metadata:
 
-        metadata.gstin = data.get("gstin")
-        metadata.pan = data.get("pan")
-        metadata.taxpayer_name = data.get(
-            "taxpayer_name"
-        )
-        metadata.notice_number = data.get(
-            "notice_number"
-        )
-        metadata.document_type = data.get(
-            "document_type"
-        )
-        metadata.section = data.get(
-            "section"
-        )
-        metadata.financial_year = data.get(
-            "financial_year"
-        )
-        metadata.tax_period = data.get(
-            "tax_period"
-        )
-        metadata.tax_amount = data.get(
-            "tax_amount"
-        )
-        metadata.interest = data.get(
-            "interest"
-        )
-        metadata.penalty = data.get(
-            "penalty"
+        metadata.gstin = gstin
+
+        metadata.pan = pan
+
+        metadata.vendor = vendor
+
+        metadata.vendor_gstin = vendor_gstin
+
+        metadata.taxpayer_name = (
+            taxpayer_name
         )
 
-    # --------------------------------------------------
-    # Otherwise → CREATE
-    # --------------------------------------------------
+        metadata.notice_number = (
+            notice_number
+        )
+
+        metadata.document_type = (
+            document_type
+        )
+
+        metadata.section = section
+
+        metadata.financial_year = (
+            financial_year
+        )
+
+        metadata.tax_period = (
+            tax_period
+        )
+
+        metadata.tax_amount = (
+            tax_amount
+        )
+
+        metadata.interest = (
+            interest
+        )
+
+        metadata.penalty = (
+            penalty
+        )
+
+    # ==========================================================
+    # 6. CREATE NEW METADATA
+    # ==========================================================
 
     else:
 
         metadata = Metadata(
+
             ocr_result_id=ocr_result.id,
 
-            gstin=data.get("gstin"),
-            pan=data.get("pan"),
-            taxpayer_name=data.get(
-                "taxpayer_name"
+            gstin=gstin,
+
+            pan=pan,
+
+            vendor=vendor,
+
+            vendor_gstin=vendor_gstin,
+
+            taxpayer_name=(
+                taxpayer_name
             ),
-            notice_number=data.get(
-                "notice_number"
+
+            notice_number=(
+                notice_number
             ),
-            document_type=data.get(
-                "document_type"
+
+            document_type=(
+                document_type
             ),
-            section=data.get(
-                "section"
+
+            section=section,
+
+            financial_year=(
+                financial_year
             ),
-            financial_year=data.get(
-                "financial_year"
+
+            tax_period=(
+                tax_period
             ),
-            tax_period=data.get(
-                "tax_period"
+
+            tax_amount=(
+                tax_amount
             ),
-            tax_amount=data.get(
-                "tax_amount"
+
+            interest=(
+                interest
             ),
-            interest=data.get(
-                "interest"
-            ),
-            penalty=data.get(
-                "penalty"
+
+            penalty=(
+                penalty
             ),
         )
 
         db.add(metadata)
 
-    # --------------------------------------------------
-    # Save
-    # --------------------------------------------------
+    # ==========================================================
+    # 7. SAVE
+    # ==========================================================
 
     db.commit()
+
     db.refresh(metadata)
 
     return metadata

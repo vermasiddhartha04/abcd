@@ -4,6 +4,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
+    JSON,
     String,
     Text,
 )
@@ -41,6 +42,22 @@ class Analysis(Base):
     )
 
     recommendation = Column(Text)
+
+    # Structured litigation extraction
+    demands = Column(
+        JSON,
+        nullable=True,
+    )
+
+    penalty_proposals = Column(
+        JSON,
+        nullable=True,
+    )
+
+    allegations = Column(
+        JSON,
+        nullable=True,
+    )
 
     created_at = Column(
         DateTime(timezone=True),
